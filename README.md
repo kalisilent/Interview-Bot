@@ -148,7 +148,6 @@ antriview/
 
 ## How I Built This
 
-This project was built using Claude as an AI coding partner — not as a code generator to paste blindly, but as a collaborator to decompose problems, review output, and maintain a high bar.
 
 The workflow throughout:
 
