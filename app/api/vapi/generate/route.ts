@@ -1,6 +1,5 @@
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
-
 import { db } from "@/firebase/admin";
 import { getRandomInterviewCover } from "@/lib/utils";
 
@@ -9,42 +8,144 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-    const { type, role, level, techstack, amount, userid } = await request.json();
+    console.log('🔥 Generate route called!');
 
     try {
-        const { text: questions } = await generateText({
-            model: google('gemini-2.0-flash-001'),
-            prompt: `Prepare questions for a job interview.
-        The job role is ${role}.
-        The job experience level is ${level}.
-        The tech stack used in the job is: ${techstack}.
-        The focus between behavioural and technical questions should lean towards: ${type}.
-        The amount of questions required is: ${amount}.
-        Please return only the questions, without any additional text.
-        The questions are going to be read by a voice assistant so do not use "/" or "*" or any other special characters which might break the voice assistant.
-        Return the questions formatted like this:
-        ["Question 1", "Question 2", "Question 3"]
-        
-        Thank you! <3
-    `,
+        const body = await request.json();
+        console.log('📦 Request body:', body);
+
+        const { role, level, techstack, amount, userid, userType, studyField, academicReport, resumeText, jdText } = body;
+
+        // For students, studyField is the identifier; for others, role is required
+        if (!userid) {
+            return Response.json({ success: false, error: 'Missing userid' }, { status: 400 });
+        }
+        if (userType === 'student' && !studyField) {
+            return Response.json({ success: false, error: 'Missing studyField for student' }, { status: 400 });
+        }
+        if (userType !== 'student' && !role) {
+            return Response.json({ success: false, error: 'Missing role' }, { status: 400 });
+        }
+
+        const durationMap: Record<string, number> = { student: 15, fresher: 30, professional: 45 };
+        const duration = durationMap[userType] || 30;
+
+        let prompt = '';
+
+        if (userType === 'student') {
+            prompt = `You are preparing questions for a UNIVERSITY ADMISSION INTERVIEW.
+
+Field of Study Applied For: ${studyField}
+
+Student Academic Report:
+${academicReport}
+
+Generate exactly ${amount} interview questions. Rules:
+- These are university admission questions, NOT job interview questions
+- Ask 2-3 questions directly based on the academic report above (specific subjects, grades, achievements mentioned)
+- Ask 1-2 questions about why they chose ${studyField} and their passion for it
+- Ask 1 question about future goals in this field
+- Ask 1 question about a challenge they overcame academically
+- Questions must be specific, NOT generic. Reference actual subjects/achievements from their report
+- Do NOT ask about work experience, tech stack, or professional skills
+- Do NOT use "/" or "*" or special characters
+- Return ONLY a JSON array: ["Question 1", "Question 2", ...]`;
+
+        } else if (userType === 'fresher') {
+            prompt = `You are preparing questions for a JOB INTERVIEW for a FRESHER candidate (0-2 years experience).
+
+Role: ${role}
+Level: ${level}
+Tech Stack: ${techstack}
+
+Candidate Resume:
+${resumeText}
+
+Job Description:
+${jdText}
+
+Generate exactly ${amount} interview questions. Rules:
+- 3-4 TECHNICAL questions specific to the tech stack: ${techstack}. Ask about specific concepts, data structures, algorithms, system design basics, or framework internals — NOT surface level
+- 2-3 questions directly from the resume (mention specific projects, internships, or technologies listed)
+- 1-2 behavioral questions (STAR format: handle conflict, tight deadline, learning from failure)
+- 1 question about why they want this specific role based on the JD
+- Questions must be specific and technical, NOT generic or vague
+- Do NOT use "/" or "*" or special characters
+- Return ONLY a JSON array: ["Question 1", "Question 2", ...]`;
+
+        } else {
+            prompt = `You are preparing questions for a JOB INTERVIEW for a PROFESSIONAL candidate (2+ years experience).
+
+Role: ${role}
+Level: ${level}
+Tech Stack: ${techstack}
+
+Candidate Resume:
+${resumeText}
+
+Job Description:
+${jdText}
+
+Generate exactly ${amount} interview questions. Rules:
+- 3-4 DEEP TECHNICAL questions: system design, architecture decisions, performance optimization, scalability, security — for ${techstack}
+- 2-3 questions from the resume: dig into specific projects, ask about technical decisions made, challenges faced
+- 2-3 LEADERSHIP questions: team management, mentoring, driving technical decisions, handling disagreements
+- 1-2 JD alignment questions: how their experience matches specific requirements in the JD
+- 1 strategic thinking question: how they would approach a complex problem at scale
+- Questions must be senior-level, specific, and challenging — NOT basic
+- Do NOT use "/" or "*" or special characters
+- Return ONLY a JSON array: ["Question 1", "Question 2", ...]`;
+        }
+
+        console.log('🤖 Calling Gemini...');
+
+        const { text: questionsRaw } = await generateText({
+            model: google('gemini-2.5-flash'),
+            prompt,
         });
 
-    const interview = {
-      role, type, level,
-      techstack: techstack.split(","),
-      questions: JSON.parse(questions),
-      userId: userid,
-      finalized: true,
-      coverImage: getRandomInterviewCover(),
-      createdAt: new Date().toISOString(),
-    };
+        console.log('✅ Gemini response:', questionsRaw);
 
-    await db.collection("interviews").add(interview);
-    return Response.json({ success: true}, { status: 200 });
+        let parsedQuestions;
+        try {
+            parsedQuestions = JSON.parse(questionsRaw);
+        } catch {
+            const match = questionsRaw.match(/\[[\s\S]*\]/);
+            if (match) {
+                parsedQuestions = JSON.parse(match[0]);
+            } else {
+                throw new Error('Could not parse questions from Gemini response');
+            }
+        }
+
+        console.log('📝 Parsed questions:', parsedQuestions);
+
+        const interview = {
+            role: userType === 'student' ? studyField : role,
+            type: userType === 'student' ? 'university-admission' : 'mixed',
+            level: userType === 'student' ? 'student' : level,
+            techstack: userType === 'student' ? [studyField] : (techstack ? techstack.split(',').map((t: string) => t.trim()) : []),
+            questions: parsedQuestions,
+            userId: userid,
+            userType: userType || 'fresher',
+            studyField: studyField || '',
+            duration,
+            academicReport: academicReport || '',
+            resumeText: resumeText || '',
+            jdText: jdText || '',
+            finalized: true,
+            coverImage: getRandomInterviewCover(),
+            createdAt: new Date().toISOString(),
+        };
+
+        console.log('💾 Saving to Firestore...');
+        const docRef = await db.collection('interviews').add(interview);
+        console.log('✅ Saved with ID:', docRef.id);
+
+        return Response.json({ success: true, interviewId: docRef.id }, { status: 200 });
 
     } catch (error) {
-        console.error(error);
-
-        return Response.json({ success: false, error }, { status: 500 });
+        console.error('❌ Error in generate route:', error);
+        return Response.json({ success: false, error: String(error) }, { status: 500 });
     }
 }

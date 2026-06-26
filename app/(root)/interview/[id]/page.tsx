@@ -49,7 +49,8 @@ const Page = async ({ params }: RouteParams) => {
                 userInitials={user.profileInitials}
                 interviewId={id} 
                 type="interview" 
-                questions={interview.questions} 
+                questions={interview.questions}
+                userType={interview.userType || 'fresher'}
             />
         </>
     )
